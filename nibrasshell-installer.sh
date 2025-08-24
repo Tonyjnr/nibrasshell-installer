@@ -59,14 +59,23 @@ install_packages() {
     if [ ${#to_install[@]} -gt 0 ]; then
         log "Installing packages: ${to_install[*]}"
         
+        # Ensure sudo credentials are cached properly
+        log "Authenticating for package installation..."
+        if ! sudo -v; then
+            error "Authentication failed"
+            exit 1
+        fi
+        
         # Try installing all packages first
-        if ! timeout 1800 yay -S --needed --noconfirm "${to_install[@]}"; then
+        if ! timeout 1800 yay -S --needed --noconfirm "${to_install[@]}" 2>/dev/null; then
             warn "Batch installation failed or timed out. Trying individual installation..."
             
             # Install packages individually to identify problematic ones
             for package in "${to_install[@]}"; do
                 log "Installing $package individually..."
-                if ! timeout 600 yay -S --needed --noconfirm "$package"; then
+                # Refresh sudo credentials before each package
+                sudo -v 2>/dev/null
+                if ! timeout 600 yay -S --needed --noconfirm "$package" 2>/dev/null; then
                     error "Failed to install $package"
                     failed_packages+=("$package")
                     
@@ -190,8 +199,8 @@ setup_config_files() {
     cp "$HOME/.config/hypr/config/config.fish" "$HOME/.config/fish/config.fish"
     
     # Set script permissions
-    chmod +x "$HOME/.config/hypr/scripts/"*
-    chmod +x "$HOME/.config/quickshell/scripts/"*
+    chmod +x "$HOME/.config/hypr/scripts/"* 2>/dev/null || warn "Could not set permissions for hypr scripts"
+    chmod +x "$HOME/.config/quickshell/scripts/"* 2>/dev/null || warn "Could not set permissions for quickshell scripts"
     
     # Copy easyeffects settings
     cp -r "$HOME/.config/hypr/config/easyeffects" "$HOME/.config/easyeffects"
@@ -260,6 +269,16 @@ main() {
         log "Installation cancelled by user"
         exit 0
     fi
+    
+    # Authenticate sudo early and keep it alive
+    log "Please authenticate for system-level operations..."
+    if ! sudo -v; then
+        error "Authentication failed. Cannot continue without sudo access."
+        exit 1
+    fi
+    
+    # Keep sudo alive in background
+    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
     
     # Define package arrays - split problematic packages
     essential_packages_repo=(
