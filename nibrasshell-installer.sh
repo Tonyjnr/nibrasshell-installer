@@ -41,10 +41,11 @@ is_installed() {
     yay -Qi "$1" &> /dev/null
 }
 
-# Function to install packages
+# Function to install packages with better error handling
 install_packages() {
     local packages=("$@")
     local to_install=()
+    local failed_packages=()
     
     log "Checking which packages need to be installed..."
     for package in "${packages[@]}"; do
@@ -57,7 +58,38 @@ install_packages() {
     
     if [ ${#to_install[@]} -gt 0 ]; then
         log "Installing packages: ${to_install[*]}"
-        yay -S --needed --noconfirm "${to_install[@]}"
+        
+        # Try installing all packages first
+        if ! timeout 1800 yay -S --needed --noconfirm "${to_install[@]}"; then
+            warn "Batch installation failed or timed out. Trying individual installation..."
+            
+            # Install packages individually to identify problematic ones
+            for package in "${to_install[@]}"; do
+                log "Installing $package individually..."
+                if ! timeout 600 yay -S --needed --noconfirm "$package"; then
+                    error "Failed to install $package"
+                    failed_packages+=("$package")
+                    
+                    # Ask user if they want to continue
+                    read -p "Continue without $package? (Y/n): " -n 1 -r
+                    echo
+                    if [[ $REPLY =~ ^[Nn]$ ]]; then
+                        error "Installation cancelled by user"
+                        exit 1
+                    fi
+                else
+                    success "$package installed successfully"
+                fi
+            done
+        else
+            success "All packages installed successfully"
+        fi
+        
+        # Report failed packages
+        if [ ${#failed_packages[@]} -gt 0 ]; then
+            warn "The following packages failed to install: ${failed_packages[*]}"
+            warn "You may need to install these manually later"
+        fi
     else
         log "All packages are already installed"
     fi
@@ -229,17 +261,21 @@ main() {
         exit 0
     fi
     
-    # Define package arrays
-    essential_packages=(
+    # Define package arrays - split problematic packages
+    essential_packages_repo=(
         "base-devel" "brightnessctl" "network-manager-applet" "konsole" 
         "blueman" "ark" "dolphin" "ffmpegthumbs" "playerctl" "kvantum" 
         "polkit-kde-agent" "jq" "gufw" "tar" "gammastep" "wl-clipboard" 
-        "easyeffects" "hyprpicker" "hyprshot-git" "bc" "sysstat" "kitty" 
-        "sassc" "systemsettings" "acpi" "fish" "kde-material-you-colors" 
-        "plasma5support" "plasma5-integration" "plasma-framework5" 
-        "ttf-jetbrains-mono-nerd" "ttf-fantasque-nerd" "powerdevil" 
-        "power-profiles-daemon" "libjpeg6-turbo" "swww" "python-regex" 
-        "copyq" "quickshell"
+        "easyeffects" "hyprpicker" "bc" "sysstat" "kitty" 
+        "sassc" "systemsettings" "acpi" "fish" "plasma5support" 
+        "plasma5-integration" "plasma-framework5" "ttf-jetbrains-mono-nerd" 
+        "ttf-fantasque-nerd" "powerdevil" "power-profiles-daemon" 
+        "libjpeg6-turbo" "swww" "python-regex" "copyq"
+    )
+    
+    # Potentially problematic AUR packages
+    aur_packages=(
+        "hyprshot-git" "quickshell" "kde-material-you-colors"
     )
     
     optional_packages=(
@@ -247,9 +283,13 @@ main() {
         "qt5ct" "strawberry"
     )
     
-    # Install essential packages
-    log "Installing essential packages..."
-    install_packages "${essential_packages[@]}"
+    # Install essential packages from official repos first
+    log "Installing essential packages from official repositories..."
+    install_packages "${essential_packages_repo[@]}"
+    
+    # Install AUR packages separately
+    log "Installing AUR packages (may take longer)..."
+    install_packages "${aur_packages[@]}"
     
     # Ask about optional packages
     echo -e "${BLUE}Do you want to install optional applications? (VS Code, Strawberry, etc.)${NC}"
